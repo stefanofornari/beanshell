@@ -88,7 +88,8 @@ public class BshScriptEngine extends AbstractScriptEngine implements Compilable,
 
 
     private Object evalSource(Object source, ScriptContext scriptContext) throws ScriptException {
-        try ( Interpreter bsh = getInterpreter() ) {
+        try {
+            Interpreter bsh = getInterpreter();
             NameSpace contextNameSpace = getEngineNameSpace(scriptContext);
             bsh.setNameSpace(contextNameSpace);
 
@@ -188,12 +189,6 @@ public class BshScriptEngine extends AbstractScriptEngine implements Compilable,
                         throw new ScriptException(e.toString(), script, -1);
                     } catch (final EvalError e) {
                         throw constructScriptException(e);
-                    } finally {
-                        try {
-                            preparsed.close();
-                        } catch (IOException e) {
-                            throw new ScriptException(e.toString(), script, -1);
-                        }
                     }
                 }
 

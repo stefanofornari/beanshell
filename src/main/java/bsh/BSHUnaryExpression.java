@@ -38,7 +38,7 @@ class BSHUnaryExpression extends SimpleNode implements ParserConstants
     public Object eval( CallStack callstack, Interpreter interpreter)
         throws EvalError
     {
-        SimpleNode node = (SimpleNode)jjtGetChild(0);
+        Node node = jjtGetChild(0);
 
         // If this is a unary increment of decrement (either pre or postfix)
         // then we need an LHS to which to assign the result.  Otherwise
@@ -86,4 +86,8 @@ class BSHUnaryExpression extends SimpleNode implements ParserConstants
         return Operators.unaryOperation((Primitive) op, kind);
     }
 
+    @Override
+    public String toString() {
+        return super.toString() + ": " + tokenImage[kind];
+    }
 }

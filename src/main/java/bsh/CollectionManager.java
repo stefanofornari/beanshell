@@ -30,6 +30,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.Iterator;
+import java.util.NoSuchElementException;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -44,13 +45,6 @@ public final class CollectionManager {
      * @return the collection manager */
     public static synchronized CollectionManager getCollectionManager() {
         return manager;
-    }
-
-    /** Checks if supplied value is iterable.
-     * @param obj the value to iterate
-     * @return true, everything is iterable */
-    public boolean isBshIterable(final Object obj) {
-        return true;
     }
 
     /** An empty iterator with hasNext always false.
@@ -83,7 +77,11 @@ public final class CollectionManager {
             }
             @Override
             public Object next() {
-                return Array.get(array, this.index++);
+                try {
+                    return Array.get(array, this.index++);
+                } catch (Throwable t) {
+                    throw new NoSuchElementException(t.getMessage());
+                }
             }
         };
     }

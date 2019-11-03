@@ -28,9 +28,9 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>org.apache-extras.beanshell</groupId>
+  <groupId>org.beanshell</groupId>
   <artifactId>bsh</artifactId>
-  <version>2.1.0-UNOFFICIAL-20180916</version>
+  <version>3.0.0-UNOFFICIAL-20191103</version>
   <packaging>bundle</packaging>
 
   <name>BeanShell</name>
@@ -121,6 +121,12 @@
       <organization>Apache Extras</organization>
       <organizationUrl>http://www.apache-extras.org/</organizationUrl>
     </developer>
+    <developer>
+      <id>nickl-</id>
+      <name>Nick (nickl-) Lombard</name>
+      <email>github@jigsoft.co.za</email>
+      <url>http://linkedin.com/in/n1ckl/</url>
+    </developer>
   </developers>
 
   <issueManagement>
@@ -161,7 +167,7 @@
               <goal>jjtree-javacc</goal>
             </goals>
             <configuration>
-              <jdkVersion>1.8</jdkVersion>
+              <jdkVersion>${version.jdk}</jdkVersion>
               <javadocFriendlyComments>true</javadocFriendlyComments>
               <static>false</static>
               <usercharstream>true</usercharstream>
@@ -172,7 +178,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-jar-plugin</artifactId>
-        <version>3.1.0</version>
+        <version>3.1.1</version>
         <configuration>
           <archive>
             <manifest>
@@ -189,7 +195,7 @@
           <dependency>
             <groupId>com.puppycrawl.tools</groupId>
             <artifactId>checkstyle</artifactId>
-            <version>8.12</version>
+            <version>8.18</version>
           </dependency>
         </dependencies>
         <executions>
@@ -213,7 +219,7 @@
       <plugin>
         <groupId>org.apache.felix</groupId>
         <artifactId>maven-bundle-plugin</artifactId>
-        <version>3.0.1</version>
+        <version>3.5.1</version>
         <extensions>true</extensions>
       </plugin>
       <plugin>
@@ -233,13 +239,14 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
-        <version>2.21.0</version>
+        <version>2.22.1</version>
         <configuration>
-          <argLine>${surefireArgLine}</argLine>
+          <argLine>-XX:+UseSerialGC ${surefireArgLine}</argLine>
           <systemPropertyVariables>
             <bsh.debugClasses></bsh.debugClasses>
             <accessibility>false</accessibility>
             <script></script>
+            <verbose>false</verbose>
             <skip_known_issues>true</skip_known_issues>
           </systemPropertyVariables>
         </configuration>
@@ -247,10 +254,14 @@
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
-        <version>0.8.1</version>
+        <version>0.8.3</version>
+        <configuration>
+          <skip>false</skip>
+        </configuration>
         <executions>
           <execution>
             <id>default-prepare-agent</id>
+            <phase>generate-resources</phase>
             <goals>
               <goal>prepare-agent</goal>
             </goals>

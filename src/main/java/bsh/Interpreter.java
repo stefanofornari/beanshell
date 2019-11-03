@@ -38,6 +38,7 @@ import java.io.Reader;
 import java.io.Serializable;
 import java.io.StringReader;
 import java.lang.reflect.InvocationTargetException;
+import java.net.URL;
 import java.util.ResourceBundle;
 
 /**
@@ -93,13 +94,12 @@ import java.util.ResourceBundle;
     See the BeanShell User's Manual for more information.
 */
 public class Interpreter
-    implements Runnable, Serializable, AutoCloseable
+    implements Runnable, Serializable
 {
     /* --- Begin static members --- */
 
     private static final long serialVersionUID = 1L;
-    public static final String VERSION = ResourceBundle
-                        .getBundle("version").getString("release");
+
     /*
         Debug utils are static so that they are reachable by code that doesn't
         necessarily have an interpreter reference (e.g. tracing in utils).
@@ -112,8 +112,11 @@ public class Interpreter
     private boolean EOF;
     public static boolean TRACE;
     public static boolean COMPATIBIILTY;
+    public static final String VERSION;
 
     static {
+        ResourceBundle b = ResourceBundle.getBundle("version");
+        VERSION = b.getString("release") + "." + b.getString("build");
         staticInit();
     }
 
@@ -174,20 +177,15 @@ public class Interpreter
 
     /* --- End instance data --- */
 
-    /**
-        The main constructor.
-        All constructors should now pass through here.
-
-        @param namespace If namespace is non-null then this interpreter's
-        root namespace will be set to the one provided.  If it is null a new
-        one will be created for it.
-        @param parent The parent interpreter if this interpreter is a child
-            of another.  May be null.  Children share a BshClassManager with
-            their parent instance.
-        @param sourceFileInfo An informative string holding the filename
-        or other description of the source from which this interpreter is
-        reading... used for debugging.  May be null.
-    */
+    /** The main constructor, all other constructors should pass through here.
+     * If namespace is not null it becomes this interpreter's global namespace
+     * otherwise a new instance is created. A parent interpreter allows values
+     * to be inherited like a shared class manager.
+     * @param console assignable collection of input output streams.
+     * @param interactive whether attached to user input.
+     * @param namespace global name space or null.
+     * @param parent interpreter or null.
+     * @param sourceFileInfo source file info for debugging or null. */
     public Interpreter( ConsoleAssignable console, boolean interactive,
             NameSpace namespace, Interpreter parent, String sourceFileInfo ) {
         long t1 = 0;
@@ -196,8 +194,11 @@ public class Interpreter
 
         this.interactive = interactive;
         this.parent = parent;
-        if ( parent != null )
-            setStrictJava( parent.getStrictJava() );
+        if ( parent != null ) {
+            setStrictJava( parent.strictJava );
+            this.parser = parent.parser;
+            this.evalOnly = parent.evalOnly;
+        }
 
         this.sourceFileInfo = sourceFileInfo;
 
@@ -215,6 +216,14 @@ public class Interpreter
     }
 
 
+    /** Wraps individual input output streams as a console collection.
+     * @param in input stream.
+     * @param out standard output stream.
+     * @param err error output stream.
+     * @param interactive whether attached to user input.
+     * @param namespace global name space or null.
+     * @param parent interpreter or null.
+     * @param sourceFileInfo source file info for debugging or null. */
     public Interpreter(
             Reader in, PrintStream out, PrintStream err,
             boolean interactive, NameSpace namespace,
@@ -223,81 +232,127 @@ public class Interpreter
                 parent, sourceFileInfo);
     }
 
+    /** Interpreter instance without a parent interpreter and source file.
+     * @param in input stream.
+     * @param out standard output stream.
+     * @param err error output stream.
+     * @param interactive whether attached to user input.
+     * @param namespace global name space or null. */
     public Interpreter(
         Reader in, PrintStream out, PrintStream err,
-        boolean interactive, NameSpace namespace)
-    {
-        this( in, out, err, interactive, namespace, null, null );
+        boolean interactive, NameSpace namespace) {
+        this(in, out, err, interactive, namespace, null, null);
     }
 
+    /** Interpreter instance without a namespace, parent and source file.
+     * @param in input stream.
+     * @param out standard output stream.
+     * @param err error output stream.
+     * @param interactive whether attached to user input. */
     public Interpreter(
         Reader in, PrintStream out, PrintStream err, boolean interactive)
     {
         this(in, out, err, interactive, null);
     }
 
-    /**
-        Construct a new interactive interpreter attached to the specified
-        console using the specified parent namespace and parent interpreter.
-    */
-    public Interpreter(ConsoleInterface console, NameSpace globalNameSpace, Interpreter parent) {
-        this( new Console(console), true, globalNameSpace, parent,
-            null == parent ? null : parent.getSourceFileInfo() );
+    /** An interactive interpreter attached to the specified console.
+     * @param console read only collection of input output streams.
+     * @param namespace global name space or null.
+     * @param parent interpreter or null. */
+    public Interpreter(ConsoleInterface console, NameSpace namespace, Interpreter parent) {
+        this(new Console(console), true, namespace, parent,
+            null == parent ? null : parent.sourceFileInfo);
     }
 
-    /**
-        Construct a new interactive interpreter attached to the specified
-        console using the specified parent interpreter assumes interpreter namesepace.
-    */
+    /** An interactive interpreter attached to a console using parent namesepace.
+     * @param console read only collection of input output streams.
+     * @param parent interpreter or null. */
     public Interpreter(ConsoleInterface console, Interpreter parent) {
-        this( console, parent.getNameSpace(), parent );
+        this(console, parent.globalNameSpace, parent);
     }
 
-    /**
-        Construct a new interactive interpreter attached to the specified
-        console using the specified parent namespace.
-    */
+    /** An interactive interpreter attached to a console with supplied namespace.
+     * @param console read only collection of input output streams.
+     * @param namespace global name space or null. */
     public Interpreter(ConsoleInterface console, NameSpace globalNameSpace) {
-        this( console, globalNameSpace, null );
+        this(console, globalNameSpace, null);
     }
 
-    /**
-        Construct a new interactive interpreter attached to the specified
-        console.
-    */
+    /** An interactive interpreter attached to a console, no namespace or parent.
+     * @param console read only collection of input output streams. */
     public Interpreter(ConsoleInterface console) {
-        this( console, null, null );
+        this(console, null, null);
     }
 
-    /**
-        Create an interpreter for evaluation only.
-    */
-    public Interpreter()
-    {
-        this( new StringReader(""),
-            System.out, System.err, false, null );
-        evalOnly = true;
+    /** A non interactive interpreter for evaluation purposes only.
+     * Uses system standard output and error with input deferred to eval. */
+    public Interpreter() {
+        this(null, null, "");
+        this.sourceFileInfo = null;
+    }
+
+    /** A non interactive interpreter for namespace.
+     * Uses system standard output and error with input deferred to eval.
+     * @param namespace global name space. */
+    public Interpreter(NameSpace namespace) {
+        this(namespace, null, null);
+    }
+
+    /** A non interactive interpreter for namespace and source file.
+     * Uses system standard output and error with input deferred to eval.
+     * @param namespace global name space.
+     * @param sourceFileInfo source file info for debugging. */
+    public Interpreter(NameSpace namespace, String sourceFileInfo) {
+        this(namespace, null, sourceFileInfo);
+    }
+
+    /** A non interactive interpreter for namespace and parent.
+     * Uses system standard output and error with input deferred to eval.
+     * @param namespace global name space.
+     * @param parent interpreter. */
+    public Interpreter(NameSpace namespace, Interpreter parent) {
+        this(namespace, parent, null);
+    }
+
+    /** A non interactive interpreter for namespace, parent and source file.
+     * Uses system standard output and error with input deferred to eval.
+     * @param namespace global name space.
+     * @param parent interpreter.
+     * @param sourceFileInfo source file info for debugging. */
+    public Interpreter(NameSpace namespace, Interpreter parent, String sourceFileInfo) {
+        this(null, System.out, System.err, false, namespace, parent, sourceFileInfo);
+        this.evalOnly = true;
         setu( "bsh.evalOnly", Primitive.TRUE );
+    }
+
+    /** Extend existing interpreter.
+     * @param parent interpreter. */
+    public Interpreter(Interpreter parent) {
+        this(parent.console, parent.interactive, parent.globalNameSpace,
+                parent, parent.sourceFileInfo);
     }
 
     // End constructors
 
-    /**
-        Attach a console
-    */
+    /** Attach an assignable console and initialize a new parser.
+     * @param console assignable collection of input output streams. */
     public void setConsole( ConsoleAssignable console ) {
         this.console = console;
-        this.parser = new Parser( getIn() );
-
-        setu( "bsh.console", console );
+        if ( null == this.parser || get_jjtree().nodeArity() != 0
+                || (null != parent && parent.interactive) )
+            this.parser = new Parser(getIn());
+        else
+            this.parser.ReInit(getIn());
     }
 
+    /** Overloaded to accept a read only console.
+     * @param console read only collection of input output streams. */
     public void setConsole( ConsoleInterface console ) {
         this.setConsole(new Console(console));
     }
 
-    private void initRootSystemObject()
-    {
+    /** Initialize the BeanShell root system objects and help system. */
+    private void initRootSystemObject() {
         BshClassManager bcm = getClassManager();
         // bsh
         setu("bsh", new NameSpace(null, bcm, "Bsh Object" ).getThis( this ) );
@@ -320,25 +375,18 @@ public class Interpreter
         setu( "bsh.evalOnly", Primitive.FALSE );
     }
 
-    /**
-        Set the global namespace for this interpreter.
-        <p>
-
-        Note: This is here for completeness.  If you're using this a lot
-        it may be an indication that you are doing more work than you have
-        to.  For example, caching the interpreter instance rather than the
-        namespace should not add a significant overhead.  No state other
-        than the debug status is stored in the interpreter.
-        <p>
-
-        All features of the namespace can also be accessed using the
-        interpreter via eval() and the script variable 'this.namespace'
-        (or global.namespace as necessary).
-    */
-    public void setNameSpace( NameSpace globalNameSpace ) {
-        this.globalNameSpace = globalNameSpace;
-        if ( null != globalNameSpace ) try {
-            if ( ! (globalNameSpace.getVariable("bsh") instanceof This) ) {
+    /** Assign the global namespace for this interpreter.
+     * <p> Note: It is preferred to keep the interpreter as long reference
+     * and use it to create discardable instances which can inherit from the
+     * parent and be dereferenced for collection. This method is only here
+     * for completeness.<p>
+     * The global namespace can be accessed in scripts using the variable
+     * 'this.namespace' or global.namespace as necessary.
+     * @param namespace global name space. */
+    public void setNameSpace( NameSpace namespace ) {
+        this.globalNameSpace = namespace;
+        if ( null != namespace ) try {
+            if ( ! (namespace.getVariable("bsh") instanceof This) ) {
                 initRootSystemObject();
                 if ( interactive )
                     loadRCFiles();
@@ -348,95 +396,78 @@ public class Interpreter
         }
     }
 
-    /**
-        Get the global namespace of this interpreter.
-        <p>
-
-        Note: This is here for completeness.  If you're using this a lot
-        it may be an indication that you are doing more work than you have
-        to.  For example, caching the interpreter instance rather than the
-        namespace should not add a significant overhead.  No state other than
-        the debug status is stored in the interpreter.
-        <p>
-
-        All features of the namespace can also be accessed using the
-        interpreter via eval() and the script variable 'this.namespace'
-        (or global.namespace as necessary).
-    */
+    /** Retrieve the global namespace for this interpreter.
+     * <p> Note: It is preferred to keep the interpreter as long reference
+     * and use it to create discardable instances which can inherit from the
+     * parent and be dereferenced for collection. This method is only here
+     * for completeness.<p>
+     * The global namespace can be accessed in scripts using the variable
+     * 'this.namespace' or global.namespace as necessary. */
     public NameSpace getNameSpace() {
         return globalNameSpace;
     }
 
-    /**
-        Run the text only interpreter on the command line or specify a file.
-    */
-    public static void main( String [] args )
-    {
+    /** Interactive interpreter command line execution.
+     * @param args optional file name for interpretation. */
+    public static void main(String[] args) {
         if ( args.length > 0 ) {
             String filename = args[0];
 
-            String [] bshArgs;
+            String[] bshArgs;
             if ( args.length > 1 ) {
-                bshArgs = new String [ args.length -1 ];
-                System.arraycopy( args, 1, bshArgs, 0, args.length-1 );
+                bshArgs = new String[args.length - 1];
+                System.arraycopy(args, 1, bshArgs, 0, args.length - 1);
             } else
-                bshArgs = new String [0];
+                bshArgs = new String[0];
 
-            try (Interpreter interpreter = new Interpreter()) {
-                interpreter.setu( "bsh.args", bshArgs );
+            try {
+                Interpreter interpreter = new Interpreter();
+                interpreter.setu("bsh.args", bshArgs);
                 Object result =
-                    interpreter.source( filename, interpreter.globalNameSpace );
-                if ( result instanceof Class )
-                    try {
-                        invokeMain( (Class<?>)result, bshArgs );
-                    } catch ( Exception e )
-                    {
-                        Object o = e;
-                        if ( e instanceof InvocationTargetException )
-                            o = e.getCause();
-                        System.err.println(
-                            "Class: "+result+" main method threw exception:"+o);
-                    }
-            } catch ( FileNotFoundException e ) {
-                System.err.println("File not found: "+e);
-            } catch ( TargetError e ) {
-                System.err.println("Script threw exception: "+e);
+                    interpreter.source(filename, interpreter.globalNameSpace);
+                if ( result instanceof Class ) try {
+                    invokeMain((Class<?>) result, bshArgs);
+                } catch (Exception e) {
+                    Object o = e;
+                    if ( e instanceof InvocationTargetException )
+                        o = e.getCause();
+                    System.err.println("Class: " + result
+                            + " main method threw exception:" + o);
+                }
+            } catch (FileNotFoundException e) {
+                System.err.println("File not found: " + e);
+            } catch (TargetError e) {
+                System.err.println("Script threw exception: " + e);
                 if ( e.inNativeCode() )
-                    e.printStackTrace( DEBUG.get(), System.err );
-            } catch ( EvalError e ) {
-                System.err.println("Evaluation Error: "+e);
-            } catch ( IOException e ) {
-                System.err.println("I/O Error: "+e);
-            }
-        } else
-        {
-
-            try (Interpreter interpreter =
-                new Interpreter( new CommandLineReader(
-                    new FileReader(System.in)),
-                    System.out, System.err, true )) {
-                interpreter.run();
+                    e.printStackTrace(DEBUG.get(), System.err);
+            } catch (EvalError e) {
+                System.err.println("Evaluation Error: " + e);
             } catch (IOException e) {
-                System.err.println("I/O Error: "+e);
+                System.err.println("I/O Error: " + e);
             }
+        } else {
+            @SuppressWarnings("resource")
+            Interpreter interpreter = new Interpreter(new CommandLineReader(
+                new FileReader(System.in)), System.out, System.err, true);
+            interpreter.run();
         }
     }
 
-    public static void invokeMain( Class<?> clas, String [] args )
-        throws Exception
-    {
-        Invocable main = Reflect.resolveJavaMethod(
-            clas, "main", new Class [] { String [].class }, true/*onlyStatic*/);
-        if ( main != null )
-            main.invoke( null, new Object [] { args } );
+    /** Convenience method for invoking the main method of a class.
+     * @param clas with static main method.
+     * @param args the string arguments.
+     * @throws Exception thrown if something fails. */
+    public static void invokeMain(Class<?> clas, String[] args)
+            throws Exception {
+        Invocable main = Reflect.resolveJavaMethod(clas, "main",
+                new Class[] {String[].class}, true/*onlyStatic*/);
+        if ( null != main )
+            main.invoke(null, new Object[] {args});
     }
 
-    /**
-        Run interactively.  (printing prompts, etc.)
-    */
-    public void run()
-    {
-        if(evalOnly)
+    /** Run interactively. (printing prompts, etc.) */
+    public void run() {
+        if ( evalOnly )
             throw new RuntimeException("bsh Interpreter: No stream");
 
         /*
@@ -447,51 +478,46 @@ public class Interpreter
         if ( interactive && null == getParent() ) try {
             eval("printBanner();");
         } catch ( EvalError e ) {
-            println(
-                "BeanShell "+VERSION+" - by Pat Niemeyer (pat@pat.net)");
+            println("BeanShell " + VERSION);
         }
 
         // init the callstack.
-        CallStack callstack = new CallStack( globalNameSpace );
+        CallStack callstack = new CallStack(globalNameSpace);
 
-        SimpleNode node = null;
+        Node node = null;
         EOF = false;
         int idx = -1;
-        while( !Thread.interrupted() && !EOF )
-        {
-            try
-            {
+        while( !Thread.interrupted() && !EOF ) {
+            try {
                 if ( interactive )
                     console.prompt(getBshPrompt());
 
                 EOF = readLine();
 
-                if( get_jjtree().nodeArity() > 0 )  // number of child nodes
-                {
+                if ( get_jjtree().nodeArity() > 0 )  { // number of child nodes
 
-                    node = (SimpleNode) (get_jjtree().rootNode());
+                    node = get_jjtree().rootNode();
                     // nodes remember from where they were sourced
                     node.setSourceFile( sourceFileInfo );
 
-                    if( DEBUG.get() )
+                    if ( DEBUG.get() )
                         node.dump(">");
                     if ( TRACE )
-                        println( "// " +node.getText() );
+                        println("// " + node.getText());
 
 
-                    Object ret = node.eval( callstack, this );
+                    Object ret = node.eval(callstack, this);
 
                     // sanity check during development
                     if ( callstack.depth() > 1 )
                         throw new InterpreterError(
                             "Callstack growing: "+callstack);
 
-                    if(ret instanceof ReturnControl)
-                        ret = ((ReturnControl)ret).value;
+                    if ( ret instanceof ReturnControl )
+                        ret = ((ReturnControl) ret).value;
 
-                    if (interactive) {
-                        if( ret != Primitive.VOID )
-                        {
+                    if ( interactive ) {
+                        if ( ret != Primitive.VOID ) {
                             setu("$_", ret);
                             setu("$"+(++idx%10), ret);
                             if ( showResults )
@@ -500,52 +526,40 @@ public class Interpreter
                             println("--> void");
                     }
                 }
-            }
-            catch(ParseException e)
-            {
+            } catch (ParseException e) {
                 error("Parser Error: " + e.getMessage(DEBUG.get()));
                 if ( DEBUG.get() )
                     e.printStackTrace();
-                if( !interactive )
+                if ( !interactive )
                     EOF = true;
                 parser.reInitInput(getIn());
-            }
-            catch(InterpreterError e)
-            {
+            } catch (InterpreterError e) {
                 error("Internal Error: " + e.getMessage());
-                if(!interactive)
+                if ( !interactive )
                     EOF = true;
-            }
-            catch(TargetError e)
-            {
+            } catch (TargetError e) {
                 error("Target Exception: " + e.getMessage() );
                 if ( e.inNativeCode() )
                     e.printStackTrace( DEBUG.get(), getErr() );
-                if(!interactive)
+                if ( !interactive )
                     EOF = true;
                 setu("$_e", e.getTarget());
-            }
-            catch (EvalError e)
-            {
+            } catch (EvalError e) {
                 if ( interactive )
                     error( "Evaluation Error: "+e.getMessage() );
                 else
                     error( "Evaluation Error: "+e.getRawMessage() );
-                if(DEBUG.get())
+                if ( DEBUG.get() )
                     e.printStackTrace();
-                if(!interactive)
+                if ( !interactive )
                     EOF = true;
-            }
-            catch(Exception e)
-            {
+            } catch (Exception e) {
                 error("Unknown error: " + e);
                 if ( DEBUG.get() )
                     e.printStackTrace();
-                if(!interactive)
+                if ( !interactive )
                     EOF = true;
-            }
-            finally
-            {
+            } finally {
                 get_jjtree().reset();
                 // reinit the callstack
                 if ( callstack.depth() > 1 ) {
@@ -561,30 +575,68 @@ public class Interpreter
 
     // begin source and eval
 
-    /**
-        Read text from fileName and eval it.
-    */
-    public Object source( String filename, NameSpace nameSpace )
-        throws FileNotFoundException, IOException, EvalError
-    {
-        File file = pathToFile( filename );
-        Interpreter.debug("Sourcing file: ", file);
-        Reader sourceIn = new BufferedReader( new FileReader(file) );
-        try {
-            return eval( sourceIn, nameSpace, filename );
-        } finally {
-            sourceIn.close();
+    /** Source a script from a url for interpretation.
+     * @param url the source url.
+     * @param namespace effective namespace.
+     * @return the return result from the script execution.
+     * @throws EvalError if a script error occurred.
+     * @throws IOException if a file read error occurred. */
+    public Object source(URL url, NameSpace namespace)
+            throws EvalError, IOException {
+        Interpreter.debug("Sourcing file: ", url.toString());
+        try (Reader fileRead = new FileReader(url.openStream());
+             Reader sourceIn = new BufferedReader(fileRead)) {
+            return eval(sourceIn, namespace, url.toString());
         }
     }
 
-    /**
-        Read text from fileName and eval it.
-        Convenience method.  Use the global namespace.
-    */
-    public Object source( String filename )
-        throws FileNotFoundException, IOException, EvalError
-    {
-        return source( filename, globalNameSpace );
+    /** Source a script from a file for interpretation.
+     * @param file the source file.
+     * @param namespace effective namespace.
+     * @return the return result from the script execution.
+     * @throws EvalError if a script error occurred.
+     * @throws IOException if a file read error occurred. */
+    public Object source(File file, NameSpace namespace)
+            throws EvalError, IOException {
+        return source(file.toURI().toURL(), namespace);
+    }
+
+    /** Source a script from a filename for interpretation.
+     * @param filename the source file name.
+     * @param namespace effective namespace.
+     * @return the return result from the script execution.
+     * @throws EvalError if a script error occurred.
+     * @throws IOException if a file read error occurred. */
+    public Object source(String filename, NameSpace namespace)
+            throws EvalError, IOException {
+        return source(pathToFile(filename), namespace);
+    }
+
+    /** Source a script from a url for interpretation.
+     * @param url the source url.
+     * @return the return result from the script execution.
+     * @throws EvalError if a script error occurred.
+     * @throws IOException if a file read error occurred. */
+    public Object source(URL url) throws EvalError, IOException {
+        return source(url, globalNameSpace);
+    }
+
+    /** Source a script from a file for interpretation.
+     * @param file the source file.
+     * @return the return result from the script execution.
+     * @throws EvalError if a script error occurred.
+     * @throws IOException if a file read error occurred. */
+    public Object source(File file) throws EvalError, IOException {
+        return source(file, globalNameSpace);
+    }
+
+    /** Source a script from a filename for interpretation.
+     * @param filename the source file name.
+     * @return the return result from the script execution.
+     * @throws EvalError if a script error occurred.
+     * @throws IOException if a file read error occurred. */
+    public Object source(String filename) throws EvalError, IOException {
+        return source(filename, globalNameSpace);
     }
 
     /**
@@ -623,86 +675,77 @@ public class Interpreter
             with source from the input stream and out/err same as
             this interpreter.
         */
-        try (Interpreter localInterpreter = new Interpreter(
-                in, getOut(), getErr(), false, nameSpace, this, sourceFileInfo  )) {
-            CallStack callstack = new CallStack( nameSpace );
+        Interpreter localInterpreter = new Interpreter(
+            in, getOut(), getErr(), false, nameSpace, this, sourceFileInfo);
+        CallStack callstack = new CallStack(nameSpace);
 
-            SimpleNode node = null;
-            boolean eof = false;
-            while( !eof )
+        Node node = null;
+        boolean eof = false;
+        while( !eof )
+        {
+            try
             {
-                try
+                eof = localInterpreter.readLine();
+                if (localInterpreter.get_jjtree().nodeArity() > 0)
                 {
-                    eof = localInterpreter.readLine();
-                    if (localInterpreter.get_jjtree().nodeArity() > 0)
-                    {
-                        node = (SimpleNode)localInterpreter.get_jjtree().rootNode();
-                        // nodes remember from where they were sourced
-                        node.setSourceFile( sourceFileInfo );
+                    node = localInterpreter.get_jjtree().rootNode();
+                    // nodes remember from where they were sourced
+                    node.setSourceFile( sourceFileInfo );
 
-                        if ( TRACE )
-                            println( "// " +node.getText() );
+                    if ( TRACE )
+                        println( "// " +node.getText() );
 
-                        retVal = node.eval( callstack, localInterpreter );
+                    retVal = node.eval(callstack, localInterpreter);
 
-                        // sanity check during development
-                        if ( callstack.depth() > 1 )
-                            throw new InterpreterError(
-                                "Callstack growing: "+callstack);
+                    // sanity check during development
+                    if ( callstack.depth() > 1 )
+                        throw new InterpreterError(
+                            "Callstack growing: "+callstack);
 
-                        if ( retVal instanceof ReturnControl ) {
-                            retVal = ((ReturnControl)retVal).value;
-                            break; // non-interactive, return control now
-                        }
-                    }
-                } catch(ParseException e) {
-                    if ( DEBUG.get() )
-                        // show extra "expecting..." info
-                        error( e.getMessage(DEBUG.get()) );
-
-                    // add the source file info and throw again
-                    e.setErrorSourceFile( sourceFileInfo );
-                    throw e;
-                } catch ( InterpreterError e ) {
-                    throw new EvalError(
-                        "Sourced file: "+sourceFileInfo+" internal Error: "
-                        + e.getMessage(), node, callstack, e);
-                } catch ( TargetError e ) {
-                    // failsafe, set the Line as the origin of the error.
-                    if ( e.getNode()==null )
-                        e.setNode( node );
-                    e.reThrow("Sourced file: "+sourceFileInfo);
-                } catch ( EvalError e) {
-                    if ( DEBUG.get())
-                        e.printStackTrace();
-                    // failsafe, set the Line as the origin of the error.
-                    if ( e.getNode()==null )
-                        e.setNode( node );
-                    e.reThrow( "Sourced file: "+sourceFileInfo );
-                } catch ( Exception e) {
-                    if ( DEBUG.get())
-                        e.printStackTrace();
-                    throw new EvalError(
-                        "Sourced file: "+sourceFileInfo+" unknown error: "
-                        + e.getMessage(), node, callstack, e);
-                } finally {
-                    localInterpreter.get_jjtree().reset();
-
-                    // reinit the callstack
-                    if ( callstack.depth() > 1 ) {
-                        callstack.clear();
-                        callstack.push( nameSpace );
+                    if ( retVal instanceof ReturnControl ) {
+                        retVal = ((ReturnControl)retVal).value;
+                        break; // non-interactive, return control now
                     }
                 }
+            } catch(ParseException e) {
+                if ( DEBUG.get() )
+                    // show extra "expecting..." info
+                    error( e.getMessage(DEBUG.get()) );
+
+                // add the source file info and throw again
+                e.setErrorSourceFile( sourceFileInfo );
+                throw e;
+            } catch ( InterpreterError e ) {
+                throw new EvalError(
+                    "Sourced file: "+sourceFileInfo+" internal Error: "
+                    + e.getMessage(), node, callstack, e);
+            } catch ( TargetError e ) {
+                // failsafe, set the Line as the origin of the error.
+                if ( e.getNode()==null )
+                    e.setNode( node );
+                e.reThrow("Sourced file: "+sourceFileInfo);
+            } catch ( EvalError e) {
+                if ( DEBUG.get())
+                    e.printStackTrace();
+                // failsafe, set the Line as the origin of the error.
+                if ( e.getNode()==null )
+                    e.setNode( node );
+                e.reThrow( "Sourced file: "+sourceFileInfo );
+            } catch ( Exception e) {
+                if ( DEBUG.get())
+                    e.printStackTrace();
+                throw new EvalError(
+                    "Sourced file: "+sourceFileInfo+" unknown error: "
+                    + e.getMessage(), node, callstack, e);
+            } finally {
+                localInterpreter.get_jjtree().reset();
+
+                // reinit the callstack
+                if ( callstack.depth() > 1 ) {
+                    callstack.clear();
+                    callstack.push( nameSpace );
+                }
             }
-            // release shared resources before auto closing.
-            if ( localInterpreter.getIn().equals(this.getIn()) )
-                localInterpreter.console.setIn(null);
-            localInterpreter.setOut(null);
-            localInterpreter.setErr(null);
-        } catch (IOException ioe) {
-            throw new EvalError("Sourced file: "+sourceFileInfo+" "
-                    + ioe.toString(), null, null, ioe);
         }
         return Primitive.unwrap( retVal );
     }
@@ -729,20 +772,33 @@ public class Interpreter
     public Object eval( String statements, NameSpace nameSpace )
         throws EvalError
     {
-        String s = ( statements.endsWith(";") ? statements : statements+";" );
         return eval(
-            new StringReader(s), nameSpace,
-            "inline evaluation of: ``"+ showEvalString(s)+"''" );
+            new StringReader(terminatedScript(statements)), nameSpace,
+            showEvalString("inline evaluation", statements) );
     }
 
-    private String showEvalString( String s ) {
-        s = s.replace('\n', ' ');
-        s = s.replace('\r', ' ');
-        if ( s.length() > 80 )
-            s = s.substring( 0, 80 ) + " . . . ";
-        return s;
+    /** Produce source file info from the supplied statements.
+     * The script statements are truncated to 80 characters and new lines
+     * removed for use in error message output.
+     * @param type of file / evaluation.
+     * @param statement of script.
+     * @return snippet of the script for debug info. */
+    String showEvalString( String type, String statement ) {
+        if ( statement.length() > 80 )
+            statement = statement.substring( 0, 80 ) + " . . . ";
+        return type.concat(" of: ``")
+                .concat(statement.replace('\n', ' ').replace('\r', ' '))
+                .concat("''");
     }
 
+    /** Convenience termination of unterminated script statements.
+     * @param statements with possible unterminated line.
+     * @return a properly line terminated statement. */
+    String terminatedScript(String statements) {
+        if ( statements.endsWith(";") )
+            return statements;
+        return statements + ";";
+    }
     // end source and eval
 
     /** Console delegate methods. */
@@ -754,26 +810,6 @@ public class Interpreter
     public final void error( Object o ) { console.error(o); }
     public void setOut( PrintStream out ) { console.setOut(out); }
     public void setErr( PrintStream err ) { console.setErr(err); }
-
-    /** Attempt the release of open resources.
-     * @throws IOException */
-    public void close() throws IOException {
-        EOF = true;
-        if ( null != getErr() ) {
-            if ( !getErr().equals(System.err) )
-                getErr().close();
-            setErr(null);
-        }
-        if ( null != getOut() ) {
-            if ( !getOut().equals(System.out) )
-                getOut().close();
-            setOut(null);
-        }
-        if ( null != getIn() ) {
-            getIn().close();
-            console.setIn(null);
-        }
-    }
 
     // End ConsoleInterface
 
@@ -805,7 +841,7 @@ public class Interpreter
             Object ret = globalNameSpace.get( name, this );
             return Primitive.unwrap( ret );
         } catch ( UtilEvalError e ) {
-            throw e.toEvalError( SimpleNode.JAVACODE, new CallStack() );
+            throw e.toEvalError( Node.JAVACODE, new CallStack() );
         }
     }
 
@@ -824,24 +860,17 @@ public class Interpreter
         Assign the value to the name.
         name may evaluate to anything assignable. e.g. a variable or field.
     */
-    public void set( String name, Object value )
-        throws EvalError
-    {
-        // map null to Primtive.NULL coming in...
-        if ( value == null )
-            value = Primitive.NULL;
-
-        CallStack callstack = new CallStack();
+    public void set(String name, Object value)
+            throws EvalError {
+        CallStack callstack = new CallStack(globalNameSpace);
         try {
-            if ( Name.isCompound( name ) )
-            {
-                LHS lhs = globalNameSpace.getNameResolver( name ).toLHS(
-                    callstack, this );
-                lhs.assign( value, false );
-            } else // optimization for common case
-                globalNameSpace.setVariable( name, value, false );
-        } catch ( UtilEvalError e ) {
-            throw e.toEvalError( SimpleNode.JAVACODE, callstack );
+            if ( Name.isCompound(name) )
+                globalNameSpace.getNameResolver(name).toLHS(
+                    callstack, this).assign(value, false);
+            else // optimization for common case
+                globalNameSpace.setVariable(name, value, false);
+        } catch (UtilEvalError e) {
+            throw e.toEvalError(Node.JAVACODE, callstack);
         }
     }
 
@@ -890,12 +919,12 @@ public class Interpreter
 
             if ( lhs.type != LHS.VARIABLE )
                 throw new EvalError("Can't unset, not a variable: "+name,
-                    SimpleNode.JAVACODE, new CallStack());
+                    Node.JAVACODE, new CallStack());
 
             lhs.nameSpace.unsetVariable( name );
         } catch ( UtilEvalError e ) {
             throw new EvalError( e.getMessage(),
-                SimpleNode.JAVACODE, new CallStack(), e);
+                Node.JAVACODE, new CallStack(), e);
         }
     }
 
@@ -1012,19 +1041,16 @@ public class Interpreter
         Localize a path to the file name based on the bsh.cwd interpreter
         working directory.
     */
-    public File pathToFile( String fileName )
-        throws IOException
-    {
+    public File pathToFile(String fileName)
+            throws IOException {
+        String cwd = (String)getu("bsh.cwd");
         File file = new File( fileName );
 
         // if relative, fix up to bsh.cwd
         if ( !file.isAbsolute() ) {
-            String cwd = (String)getu("bsh.cwd");
             file = new File( cwd + File.separator + fileName );
         }
 
-        // The canonical file name is also absolute.
-        // No need for getAbsolutePath() here...
         return new File( file.getCanonicalPath() );
     }
 
@@ -1124,9 +1150,9 @@ public class Interpreter
         Specify the source of the text from which this interpreter is reading.
         Note: there is a difference between what file the interrpeter is
         sourcing and from what file a method was originally parsed.  One
-        file may call a method sourced from another file.  See SimpleNode
+        file may call a method sourced from another file.  See Node
         for origination file info.
-        @see bsh.SimpleNode#getSourceFile()
+        @see bsh.Node#getSourceFile()
     */
     public String getSourceFileInfo() {
         if ( sourceFileInfo != null )

@@ -34,7 +34,8 @@ package bsh;
 */
 class BSHArrayDimensions extends SimpleNode
 {
-    public Class baseType;
+    private static final long serialVersionUID = 1L;
+    public Class<?> baseType;
     public int numDefinedDims;
     public int numUndefinedDims;
     /**
@@ -43,21 +44,19 @@ class BSHArrayDimensions extends SimpleNode
         time.
     */
     public int [] definedDimensions;
-    private Object cached = null;
     BSHArrayDimensions(int id) { super(id); }
 
     public void addDefinedDimension() { numDefinedDims++; }
     public void addUndefinedDimension() { numUndefinedDims++; }
 
     public Object eval(
-            Class type, CallStack callstack, Interpreter interpreter )
+            Class<?> type, CallStack callstack, Interpreter interpreter )
         throws EvalError
     {
         Interpreter.debug("array base type = ", type);
         baseType = type;
-        if ( null == cached )
-            cached = eval( callstack, interpreter );
-        return cached;
+
+        return eval( callstack, interpreter );
     }
 
     /**
@@ -75,7 +74,7 @@ class BSHArrayDimensions extends SimpleNode
     public Object eval( CallStack callstack, Interpreter interpreter )
         throws EvalError
     {
-        SimpleNode child = (SimpleNode)jjtGetChild(0);
+        Node child = jjtGetChild(0);
 
         /*
             Child is array initializer.  Evaluate it and fill in the
@@ -88,6 +87,11 @@ class BSHArrayDimensions extends SimpleNode
         {
             Object initValue = ((BSHArrayInitializer) child).eval(
                 baseType, numUndefinedDims, callstack, interpreter);
+
+            // eval may return Map, MapEntry, Collection types
+            if ( !initValue.getClass().isArray() )
+                return initValue;
+
             definedDimensions = BshArray.dimensions(initValue);
 
             // loose typed array inferred dimensions
@@ -112,8 +116,7 @@ class BSHArrayDimensions extends SimpleNode
             for(int i = 0; i < numDefinedDims; i++)
             {
                 try {
-                    Object length = ((SimpleNode)jjtGetChild(i)).eval(
-                        callstack, interpreter);
+                    Object length = jjtGetChild(i).eval(callstack, interpreter);
                     definedDimensions[i] = ((Primitive)length).intValue();
                 }
                 catch(Exception e)

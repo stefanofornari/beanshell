@@ -404,16 +404,8 @@ class Name implements java.io.Serializable
             }
 
             // static bean property
-            if ( obj == null ) try {
-                obj = Reflect.getObjectProperty(clas, field);
-            } catch (ReflectError e) {
-                Interpreter.debug("field reflect error: ", e);
-            }
-
             if ( obj == null )
-                throw new UtilEvalError(
-                    "No static field or inner class: "
-                    + field + " of " + clas );
+                obj = Reflect.getObjectProperty(clas, field);
 
             return completeRound( field, suffix(evalName), obj );
         }
@@ -745,7 +737,7 @@ class Name implements java.io.Serializable
                     return lhs;
                 }
             } catch(ReflectError e) {
-                throw new UtilEvalError("Field access: "+e, e);
+                return new LHS(obj, evalName);
             }
         }
 
@@ -778,7 +770,7 @@ class Name implements java.io.Serializable
     */
     public Object invokeMethod(
         Interpreter interpreter, Object[] args, CallStack callstack,
-        SimpleNode callerInfo
+        Node callerInfo
     )
         throws UtilEvalError, EvalError, ReflectError, InvocationTargetException
     {
@@ -893,7 +885,7 @@ class Name implements java.io.Serializable
     */
     private Object invokeLocalMethod(
         Interpreter interpreter, Object[] args, CallStack callstack,
-        SimpleNode callerInfo
+        Node callerInfo
     )
         throws EvalError/*, ReflectError, InvocationTargetException*/
     {

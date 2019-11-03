@@ -82,7 +82,7 @@ public final class Reflect {
     public static Object invokeObjectMethod(
             Object object, String methodName, Object[] args,
             Interpreter interpreter, CallStack callstack,
-            SimpleNode callerInfo ) throws ReflectError, EvalError,
+            Node callerInfo ) throws ReflectError, EvalError,
             InvocationTargetException {
         // Bsh scripted object
         if ( object instanceof This && !This.isExposedThisMethod(methodName) )
@@ -114,7 +114,7 @@ public final class Reflect {
     */
     public static Object invokeStaticMethod(
             BshClassManager bcm, Class<?> clas, String methodName,
-            Object [] args, SimpleNode callerInfo )
+            Object [] args, Node callerInfo )
                     throws ReflectError, UtilEvalError,
                            InvocationTargetException {
         Interpreter.debug("invoke static Method");
@@ -573,19 +573,19 @@ public final class Reflect {
             return Primitive.VOID;
         }
 
-        Interpreter.debug("property access: ");
         if ( obj instanceof Class )
             cls = (Class) obj;
         Invocable getter = BshClassManager.memberCache.get(cls)
                 .findGetter(propName.toString());
-        if ( null == getter )
-            throw new ReflectError("No such property getter: " + propName
-                    + " for type: " + StringUtil.typeString(cls));
+        if ( null == getter ) {
+            Interpreter.debug("property getter not found");
+            return Primitive.VOID;
+        }
         try {
             return getter.invoke(obj);
         } catch(InvocationTargetException e) {
-            throw new ReflectError("Property accessor threw exception: "
-                + e.getCause(),  e.getCause());
+            Interpreter.debug("Property accessor threw exception");
+            return Primitive.VOID;
         }
     }
 
@@ -652,7 +652,7 @@ public final class Reflect {
     */
     public static Object invokeCompiledCommand(
         Class<?> commandClass, Object [] args, Interpreter interpreter,
-        CallStack callstack, SimpleNode callerInfo )
+        CallStack callstack, Node callerInfo )
         throws UtilEvalError
     {
         // add interpereter and namespace to args list
